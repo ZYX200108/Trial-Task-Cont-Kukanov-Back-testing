@@ -8,7 +8,7 @@ TARGET = 5000
 
 def allocate(snapshot: pd.DataFrame,
              params: Dict[str, float],
-             step: int = 100) -> List[int]:
+             step: int = 50) -> List[int]:
     """
     Implement the exact algorithm from allocator_pseudocode.txt
     """

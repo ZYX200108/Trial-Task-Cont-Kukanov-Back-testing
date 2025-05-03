@@ -107,6 +107,24 @@ def simulate_dynamic(snapshots, strategy, strategy_name="") -> dict:
     return {"cash": cash, "avg_price": avg_price, "filled": filled}
 
 
+def analyze_data_scale(snapshots):
+    """Analyze the scale of the data to inform parameter choices"""
+    if not snapshots:
+        return
+
+    first_snap = snapshots[0]
+    ask_prices = first_snap["ask_px_00"].tolist()
+    ask_sizes = first_snap["ask_sz_00"].tolist()
+
+    avg_price = sum(ask_prices) / len(ask_prices)
+    avg_size = sum(ask_sizes) / len(ask_sizes)
+    total_liquidity = sum(ask_sizes)
+
+    # Price differences between venues
+    price_spread = max(ask_prices) - min(ask_prices)
+
+    return avg_price, avg_size, total_liquidity
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True)
@@ -115,22 +133,66 @@ def main():
     # Load snapshots
     snapshots = load_snapshots(args.data)
 
-    # Parameter search grid
-    param_grid = [
-        {"lambda_under": lu, "lambda_over": lo, "theta_queue": tq}
-        for lu in [0.0, 0.5, 1.0, 2.0]  # Underfill penalty
-        for lo in [0.0]  # Overfill penalty (keeping at 0)
-        for tq in [0.0, 0.02, 0.05, 0.1]  # Queue risk penalty
+    # First, let's understand the data characteristics
+    if snapshots:
+        first_snap = snapshots[0]
+        avg_price = first_snap["ask_px_00"].mean()
+        avg_size = first_snap["ask_sz_00"].mean()
+
+    # More comprehensive parameter grid
+    # Values are scaled relative to the stock price (~$223)
+    param_grid = []
+
+    # Analyze data scale
+    avg_price, avg_size, total_liquidity = analyze_data_scale(snapshots)
+
+    lambda_under_values = [
+        0.0,
+        avg_price * 0.001,  # 0.1% of price
+        avg_price * 0.005,  # 0.5% of price
+        avg_price * 0.01,  # 1% of price
+        avg_price * 0.02,  # 2% of price
+        avg_price * 0.05,  # 5% of price
+        avg_price * 0.1,  # 10% of price
     ]
+
+    # For lambda_over: usually less critical
+    lambda_over_values = [
+        0.0,
+        avg_price * 0.0005,  # 0.05% of price
+        avg_price * 0.001,  # 0.1% of price
+        avg_price * 0.005,  # 0.5% of price
+    ]
+
+    # For theta_queue: penalty for queue risk
+    # Should be smaller than lambda_under since it's more speculative
+    theta_queue_values = [
+        0.0,
+        avg_price * 0.0001,  # 0.01% of price
+        avg_price * 0.0005,  # 0.05% of price
+        avg_price * 0.001,  # 0.1% of price
+        avg_price * 0.005,  # 0.5% of price
+        avg_price * 0.01,  # 1% of price
+    ]
+
+    for lu in lambda_under_values:
+        for lo in lambda_over_values:
+            for tq in theta_queue_values:
+                param_grid.append({
+                    "lambda_under": lu,
+                    "lambda_over": lo,
+                    "theta_queue": tq
+                })
+
 
     # Find best parameters
     best_result = None
     best_params = None
     best_avg_price = float("inf")
 
-    for params in param_grid:
+    for i, params in enumerate(param_grid):
+
         result = simulate_static_execution(snapshots, params)
-        # Only consider results that filled exactly TARGET
         if result["filled"] == TARGET and result["avg_price"] < best_avg_price:
             best_avg_price = result["avg_price"]
             best_result = result
