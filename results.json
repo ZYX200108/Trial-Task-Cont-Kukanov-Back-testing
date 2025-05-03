@@ -1,28 +1,34 @@
 {
   "best_params": {
-    "lambda_under": 50,
-    "lambda_over": 50,
-    "theta_queue": 10
+    "lambda_under": 200,
+    "lambda_over": 0,
+    "theta_queue": 50
   },
   "router": {
-    "cash": 1114102.2800000003,
-    "avg_price": 222.82045600000006
+    "cash": 1114102.1800000002,
+    "avg_price": 222.82043600000003,
+    "filled": 5000
   },
-  "best_ask": {
-    "cash": 1147079.6400000001,
-    "avg_price": 229.41592800000004
-  },
-  "vwap": {
-    "cash": 1147079.6400000001,
-    "avg_price": 229.41592800000004
-  },
-  "twap_60s": {
-    "cash": 1116493.8500000045,
-    "avg_price": 223.2987700000009
+  "baselines": {
+    "best_ask": {
+      "cash": 1114102.1800000002,
+      "avg_price": 222.82043600000003,
+      "filled": 5000
+    },
+    "vwap": {
+      "cash": 1114102.1800000002,
+      "avg_price": 222.82043600000003,
+      "filled": 5000
+    },
+    "twap_60s": {
+      "cash": 1116493.1700000041,
+      "avg_price": 223.29863400000082,
+      "filled": 5000
+    }
   },
   "savings_bps": {
-    "vs_best_ask": 287.4897160584234,
-    "vs_vwap": 287.4897160584234,
-    "vs_twap": 21.42035981661851
+    "vs_best_ask": 0.0,
+    "vs_vwap": 0.0,
+    "vs_twap": 21.41517802571
   }
 }
