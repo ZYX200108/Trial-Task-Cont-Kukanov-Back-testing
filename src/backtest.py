@@ -77,10 +77,15 @@ def main():
       "vwap":        res_vwap,
       "twap_60s":    res_twap,
       "savings_bps": {
-        "vs_best_ask": (res_best["avg_price"] - best["result"]["avg_price"]) * 1e4,
-        "vs_vwap":     (res_vwap["avg_price"] - best["result"]["avg_price"]) * 1e4,
-        "vs_twap":     (res_twap["avg_price"] - best["result"]["avg_price"]) * 1e4
+        "vs_best_ask": (res_best["avg_price"] - best["result"]["avg_price"])
+                       / res_best["avg_price"] * 1e4,
+        "vs_vwap":     (res_vwap["avg_price"] - best["result"]["avg_price"])
+                       / res_vwap["avg_price"] * 1e4,
+        "vs_twap":     (res_twap["avg_price"] - best["result"]["avg_price"])
+                       / res_twap["avg_price"] * 1e4
       }
+
+
     }
 
     print(json.dumps(output, indent=2))
