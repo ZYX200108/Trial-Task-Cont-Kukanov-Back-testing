@@ -1,152 +1,167 @@
+# src/backtest.py
 import argparse
 import json
 from src.utils import load_snapshots
 from src.allocator import allocate, TARGET
-from src.baselines import best_ask, vwap, twap_equal
+from src.baselines import best_ask, vwap, twap_60s
 
 
-def simulate_execution(snapshots, alloc: list) -> dict:
-    rem = alloc.copy()
-    cash = 0.0
+def simulate_static_execution(snapshots, params: dict) -> dict:
+    """
+    Simulate execution using static allocation
+    """
+    if not snapshots:
+        return {"cash": 0.0, "avg_price": 0.0, "filled": 0}
+
+    # Get allocation from first snapshot
+    alloc = allocate(snapshots[0], params)
+
+    # Execute the allocation across all snapshots
+    remaining = alloc.copy()
+    cash_spent = 0.0
     filled = 0
 
     for snap in snapshots:
-        if sum(rem) == 0:
+        if sum(remaining) == 0:
             break
-        depths = snap["ask_sz_00"].tolist()
-        # prices = snap["ask_px_00"].tolist()
-        prices = snap["ask_px_00"].fillna(method='ffill').tolist()
 
-        # Calculate fills without exceeding remaining shares
-        fills = []
-        remaining = sum(rem)
-        for r, d in zip(rem, depths):
-            fill = min(r, d)
-            if remaining <= 0:
-                fills.append(0)
-            else:
-                fill = min(fill, remaining)
-                fills.append(fill)
-                remaining -= fill
+        ask_prices = snap["ask_px_00"].tolist()
+        ask_sizes = snap["ask_sz_00"].tolist()
 
-        cash += sum(f * p for f, p in zip(fills, prices))
-        rem = [r - f for r, f in zip(rem, fills)]
-        filled += sum(fills)
+        # Execute what we can at this snapshot
+        for i in range(len(remaining)):
+            if remaining[i] > 0 and i < len(ask_sizes) and i < len(ask_prices):
+                exe = min(remaining[i], ask_sizes[i])
+                if exe > 0:
+                    cash_spent += exe * ask_prices[i]
+                    filled += exe
+                    remaining[i] -= exe
 
-    # Final market order for leftovers
-    remaining = sum(rem)
-    if remaining > 0 and snapshots:
-        last_prices = snapshots[-1]["ask_px_00"].tolist()
-        cash += remaining * min(last_prices)
-        filled += remaining
+    # Handle any remaining unfilled quantity at the end
+    unfilled = TARGET - filled
+    if unfilled > 0 and snapshots:
+        # Market order at the end to complete the trade
+        last_snap = snapshots[-1]
+        last_prices = last_snap["ask_px_00"].tolist()
+        if last_prices:
+            cheapest_price = min(last_prices)
+            cash_spent += unfilled * cheapest_price
+            filled += unfilled
 
-    avg_price = cash / filled if filled > 0 else 0.0
-    return {"cash": cash, "avg_price": avg_price, "filled": filled}
+    avg_price = cash_spent / filled if filled > 0 else 0.0
+
+    return {
+        "cash": cash_spent,
+        "avg_price": avg_price,
+        "filled": filled
+    }
 
 
-def simulate_dynamic(snapshots, strategy):
-    rem = TARGET
+def simulate_dynamic(snapshots, strategy, strategy_name="") -> dict:
+    """Simulate dynamic execution strategies (baselines)"""
+    remaining = TARGET
     cash = 0.0
     filled = 0
-    n = len(snapshots)
 
     for i, snap in enumerate(snapshots):
-        if rem <= 0:
+        if remaining <= 0:
             break
 
-        if strategy == twap_equal:
-            alloc = twap_equal(snap, n - i, rem)
+        if strategy_name == "twap_60s":
+            # TWAP: divide equally across 60-second buckets
+            # Assuming snapshots are roughly 1 per second
+            bucket_size = 60
+            bucket_idx = i // bucket_size
+            total_buckets = max(1, len(snapshots) // bucket_size)
+
+            # Execute only at the start of each bucket
+            if i % bucket_size == 0:
+                shares_per_bucket = remaining // max(1, total_buckets - bucket_idx)
+                alloc = strategy(snap, shares_per_bucket)
+            else:
+                alloc = [0] * len(snap)
         else:
             alloc = strategy(snap)
 
-        depths = snap["ask_sz_00"].tolist()
-        prices = snap["ask_px_00"].tolist()
+        ask_prices = snap["ask_px_00"].tolist()
+        ask_sizes = snap["ask_sz_00"].tolist()
 
-        # Calculate fills without exceeding remaining shares
-        fills = []
-        remaining = rem
-        for a, d in zip(alloc, depths):
-            fill = min(a, d, remaining)
-            fills.append(fill)
-            remaining -= fill
-            if remaining <= 0:
-                break
+        # Execute the allocation
+        for j in range(min(len(alloc), len(ask_sizes), len(ask_prices))):
+            if alloc[j] > 0:
+                exe = min(alloc[j], ask_sizes[j], remaining)
+                if exe > 0:
+                    cash += exe * ask_prices[j]
+                    filled += exe
+                    remaining -= exe
 
-        cash += sum(f * p for f, p in zip(fills, prices))
-        rem -= sum(fills)
-        filled += sum(fills)
-
-    # Final market order for leftovers
-    if rem > 0 and snapshots:
+    # Ensure we fill the entire order
+    if remaining > 0 and snapshots:
         last_prices = snapshots[-1]["ask_px_00"].tolist()
-        cash += rem * min(last_prices)
-        filled += rem
+        if last_prices:
+            cheapest_price = min(last_prices)
+            cash += remaining * cheapest_price
+            filled += remaining
 
     avg_price = cash / filled if filled > 0 else 0.0
     return {"cash": cash, "avg_price": avg_price, "filled": filled}
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--data", required=True)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", required=True)
+    args = parser.parse_args()
 
-    # Load and validate snapshots
-    snaps = load_snapshots(args.data)
-    if not snaps:
-        raise ValueError("No valid snapshots loaded")
+    # Load snapshots
+    snapshots = load_snapshots(args.data)
 
-    if 'ask_px_00' not in snaps[0].columns:
-        raise ValueError("Invalid snapshot format - missing L1 fields")
-
-    # p = argparse.ArgumentParser()
-    # p.add_argument("--data", required=True)
-    # args = p.parse_args()
-    # snaps = load_snapshots(args.data)
-
-    # Economically meaningful parameters (basis points of ~$200 stock)
-    # param_grid = [
-    #     {"lambda_under": lu, "lambda_over": 0.0, "theta_queue": tq}
-    #     for lu in [50.0, 100.0, 200.0]  # $0.50-$2.00 per share
-    #     for tq in [10.0, 20.0]  # $0.10-$0.20 per share
-    # ]
+    # Parameter search grid
     param_grid = [
-        {"lambda_under": 200, "lambda_over": 0, "theta_queue": 50},  # $2/shr underfill penalty
-        {"lambda_under": 500, "lambda_over": 0, "theta_queue": 100}  # $5/shr penalty
+        {"lambda_under": lu, "lambda_over": lo, "theta_queue": tq}
+        for lu in [0.0, 0.5, 1.0, 2.0]  # Underfill penalty
+        for lo in [0.0]  # Overfill penalty (keeping at 0)
+        for tq in [0.0, 0.02, 0.05, 0.1]  # Queue risk penalty
     ]
 
-    best = {"params": None, "res": None, "avg": float("inf")}
+    # Find best parameters
+    best_result = None
+    best_params = None
+    best_avg_price = float("inf")
+
     for params in param_grid:
-        alloc = allocate(snaps, params)
-        result = simulate_execution(snaps, alloc)
-        if result["filled"] == TARGET and result["avg_price"] < best["avg"]:
-            best = {"params": params, "res": result, "avg": result["avg_price"]}
+        result = simulate_static_execution(snapshots, params)
+        # Only consider results that filled exactly TARGET
+        if result["filled"] == TARGET and result["avg_price"] < best_avg_price:
+            best_avg_price = result["avg_price"]
+            best_result = result
+            best_params = params
 
-    # Baselines (dynamic execution)
-    res_best = simulate_dynamic(snaps, best_ask)
-    res_vwap = simulate_dynamic(snaps, vwap)
-    res_twap = simulate_dynamic(snaps, twap_equal)
+    # Run baselines
+    baseline_best = simulate_dynamic(snapshots, best_ask)
+    baseline_vwap = simulate_dynamic(snapshots, vwap)
+    baseline_twap = simulate_dynamic(snapshots, lambda s, shares: twap_60s(s, shares), "twap_60s")
 
-    # Calculate savings only if baselines filled completely
-    def safe_bps(ref, test):
+    # Calculate savings
+    def calc_bps(ref, test):
         if ref["filled"] == 0 or test["filled"] == 0:
             return 0.0
         return ((ref["avg_price"] - test["avg_price"]) / ref["avg_price"]) * 10000
 
     output = {
-        "best_params": best["params"],
-        "router": best["res"],
+        "best_params": best_params,
+        "router": best_result,
         "baselines": {
-            "best_ask": res_best,
-            "vwap": res_vwap,
-            "twap_60s": res_twap
+            "best_ask": baseline_best,
+            "vwap": baseline_vwap,
+            "twap_60s": baseline_twap
         },
         "savings_bps": {
-            "vs_best_ask": safe_bps(res_best, best["res"]),
-            "vs_vwap": safe_bps(res_vwap, best["res"]),
-            "vs_twap": safe_bps(res_twap, best["res"])
+            "vs_best_ask": calc_bps(baseline_best, best_result),
+            "vs_vwap": calc_bps(baseline_vwap, best_result),
+            "vs_twap": calc_bps(baseline_twap, best_result)
         }
     }
+
     print(json.dumps(output, indent=2))
 
 

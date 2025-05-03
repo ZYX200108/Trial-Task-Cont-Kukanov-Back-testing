@@ -1,58 +1,93 @@
-import itertools
+# src/allocator.py
 from typing import Dict, List
 import pandas as pd
+import numpy as np
 
 TARGET = 5000
 
 
-def generate_allocations(n_venues: int, step: int = 100) -> List[List[int]]:
-    ranges = [range(0, TARGET + step, step) for _ in range(n_venues)]
-    for combo in itertools.product(*ranges):
-        if sum(combo) == TARGET:
-            yield list(combo)
-
-
-def compute_cost(allocation: List[int],
-                 ask0: List[float],
-                 disp0: List[int],
-                 snapshots: List[pd.DataFrame],
-                 params: Dict[str, float]) -> float:
-    # Simulate limit order fills across all snapshots
-    rem = allocation.copy()
-    for snap in snapshots:
-        depths = snap["ask_sz_00"].tolist()
-        rem = [max(0, r - d) for r, d in zip(rem, depths)]
-
-    filled = TARGET - sum(rem)
-    cash_cost = sum(a * p for a, p in zip(allocation, ask0))
-
-    shortfall = max(0, TARGET - filled)
-    queue_risk = sum(max(0, a - d0) for a, d0 in zip(allocation, disp0))
-
-    return cash_cost + params["lambda_under"] * shortfall + params["theta_queue"] * queue_risk
-
-
-def allocate(snapshots: List[pd.DataFrame],
+def allocate(snapshot: pd.DataFrame,
              params: Dict[str, float],
              step: int = 100) -> List[int]:
-    if not snapshots:
-        return []
+    """
+    Implement the exact algorithm from allocator_pseudocode.txt
+    """
+    order_size = TARGET
+    venues = snapshot
+    lambda_over = params["lambda_over"]
+    lambda_under = params["lambda_under"]
+    theta_queue = params["theta_queue"]
 
-    snap0 = snapshots[0]
-    ask0 = snap0["ask_px_00"].tolist()
-    disp0 = snap0["ask_sz_00"].tolist()
-    n_venues = len(ask0)
+    n_venues = len(venues)
+    ask_prices = venues["ask_px_00"].tolist()
+    ask_sizes = venues["ask_sz_00"].tolist()
 
-    best_cost = float("inf")
-    best_alloc = None
+    # Following the pseudocode exactly:
+    # step ← 100
+    # splits ← [[]]
+    splits = [[]]
 
-    for alloc in generate_allocations(n_venues, step):
-        cost = compute_cost(alloc, ask0, disp0, snapshots, params)
+    # for v in 0 .. len(venues)-1:
+    for v in range(n_venues):
+        new_splits = []
+        for alloc in splits:
+            used = sum(alloc)
+            max_v = min(order_size - used, ask_sizes[v])
+            # for q in 0 .. max_v step step:
+            for q in range(0, max_v + 1, step):
+                new_splits.append(alloc + [q])
+        splits = new_splits
+
+    best_cost = float('inf')
+    best_split = []
+
+    for alloc in splits:
+        if sum(alloc) != order_size:
+            continue
+        cost = compute_cost(alloc, venues, order_size, lambda_over, lambda_under, theta_queue)
         if cost < best_cost:
-            best_cost, best_alloc = cost, alloc
+            best_cost = cost
+            best_split = alloc
 
-    if best_alloc is None:
-        idx = ask0.index(min(ask0))
-        return [TARGET if i == idx else 0 for i in range(n_venues)]
+    # If no valid allocation found, create default
+    if not best_split:
+        idx = ask_prices.index(min(ask_prices))
+        best_split = [0] * n_venues
+        best_split[idx] = order_size
 
-    return best_alloc
+    return best_split
+
+
+def compute_cost(split: List[int],
+                 venues: pd.DataFrame,
+                 order_size: int,
+                 lambda_over: float,
+                 lambda_under: float,
+                 theta_queue: float) -> float:
+    """
+    Implement compute_cost exactly as in pseudocode
+    """
+    ask_prices = venues["ask_px_00"].tolist()
+    ask_sizes = venues["ask_sz_00"].tolist()
+
+    # Assuming fees and rebates are 0 as per pseudocode
+    fees = [0.0] * len(venues)
+    rebates = [0.0] * len(venues)
+
+    executed = 0
+    cash_spent = 0
+
+    # for i in 0 .. len(venues)-1:
+    for i in range(len(venues)):
+        exe = min(split[i], ask_sizes[i])
+        executed += exe
+        cash_spent += exe * (ask_prices[i] + fees[i])
+        maker_rebate = max(split[i] - exe, 0) * rebates[i]
+        cash_spent -= maker_rebate
+
+    underfill = max(order_size - executed, 0)
+    overfill = max(executed - order_size, 0)
+    risk_pen = theta_queue * (underfill + overfill)
+    cost_pen = lambda_under * underfill + lambda_over * overfill
+
+    return cash_spent + risk_pen + cost_pen
