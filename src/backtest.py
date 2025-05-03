@@ -125,6 +125,8 @@ def analyze_data_scale(snapshots):
 
     return avg_price, avg_size, total_liquidity
 
+
+# src/backtest.py - modify the main function
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", required=True)
@@ -133,19 +135,10 @@ def main():
     # Load snapshots
     snapshots = load_snapshots(args.data)
 
-    # First, let's understand the data characteristics
-    if snapshots:
-        first_snap = snapshots[0]
-        avg_price = first_snap["ask_px_00"].mean()
-        avg_size = first_snap["ask_sz_00"].mean()
-
-    # More comprehensive parameter grid
-    # Values are scaled relative to the stock price (~$223)
-    param_grid = []
-
     # Analyze data scale
     avg_price, avg_size, total_liquidity = analyze_data_scale(snapshots)
 
+    # Create parameter grid
     lambda_under_values = [
         0.0,
         avg_price * 0.001,  # 0.1% of price
@@ -156,7 +149,6 @@ def main():
         avg_price * 0.1,  # 10% of price
     ]
 
-    # For lambda_over: usually less critical
     lambda_over_values = [
         0.0,
         avg_price * 0.0005,  # 0.05% of price
@@ -164,8 +156,6 @@ def main():
         avg_price * 0.005,  # 0.5% of price
     ]
 
-    # For theta_queue: penalty for queue risk
-    # Should be smaller than lambda_under since it's more speculative
     theta_queue_values = [
         0.0,
         avg_price * 0.0001,  # 0.01% of price
@@ -175,6 +165,7 @@ def main():
         avg_price * 0.01,  # 1% of price
     ]
 
+    param_grid = []
     for lu in lambda_under_values:
         for lo in lambda_over_values:
             for tq in theta_queue_values:
@@ -184,15 +175,20 @@ def main():
                     "theta_queue": tq
                 })
 
-
     # Find best parameters
     best_result = None
     best_params = None
     best_avg_price = float("inf")
 
-    for i, params in enumerate(param_grid):
+    # Let's also track the costs for different parameters
+    param_results = []
 
+    for i, params in enumerate(param_grid):
         result = simulate_static_execution(snapshots, params)
+
+        # Store all results for debugging
+        param_results.append((params, result))
+
         if result["filled"] == TARGET and result["avg_price"] < best_avg_price:
             best_avg_price = result["avg_price"]
             best_result = result
@@ -225,7 +221,6 @@ def main():
     }
 
     print(json.dumps(output, indent=2))
-
 
 if __name__ == "__main__":
     main()
