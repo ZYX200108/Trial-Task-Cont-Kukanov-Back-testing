@@ -20,20 +20,28 @@ def generate_allocations(displayed_sizes: List[int],
 
 def compute_cost(allocation: List[int],
                  ask_prices: List[float],
+                 displayed_sizes: List[int],
                  params: Dict[str, float]) -> float:
     """
     Cost = Cash spent + lambda_under * shortfall + lambda_over * overfill
     + theta_queue * queue_risk (currently 0).
     """
+    # 1) cash you’d spend if all shares filled at the displayed ask
     cash_spent = sum(a * p for a, p in zip(allocation, ask_prices))
-    total = sum(allocation)
-    shortfall = max(0, TARGET - total)
-    overfill  = max(0, total - TARGET)
-    queue_risk = 0.0  # placeholder (no queue‐position model)
+
+    # 2) how many actually fill (you can’t take more than displayed)
+    fills = [min(a, s) for a, s in zip(allocation, displayed_sizes)]
+    executed = sum(fills)
+
+    # 3) penalties
+    shortfall = max(0, TARGET - executed)  # shares you tried to take but couldn’t
+    overfill = max(0, executed - TARGET)  # if you somehow end up > target
+    queue_risk = sum(max(0, a - s) for a, s in zip(allocation, displayed_sizes))
+
     return (cash_spent
-            + params.get("lambda_under", 0.0) * shortfall
-            + params.get("lambda_over", 0.0)  * overfill
-            + params.get("theta_queue", 0.0)  * queue_risk)
+            + + params["lambda_under"] * shortfall
+            + + params["lambda_over"] * overfill
+            + + params["theta_queue"] * queue_risk)
 
 def allocate(snapshot: pd.DataFrame,
              params: Dict[str, float],
@@ -49,7 +57,7 @@ def allocate(snapshot: pd.DataFrame,
     best_alloc = None
 
     for alloc in generate_allocations(displayed_sizes, step, TARGET):
-        cost = compute_cost(alloc, ask_prices, params)
+        cost = compute_cost(alloc, ask_prices, displayed_sizes, params)
         if cost < best_cost:
             best_cost, best_alloc = cost, alloc
 
