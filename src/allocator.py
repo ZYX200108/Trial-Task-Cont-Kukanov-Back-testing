@@ -11,7 +11,9 @@ def generate_allocations(displayed_sizes: List[int],
     Enumerate all ways to split `target` shares into chunks of size `step`,
     without exceeding each venue's displayed size.
     """
-    ranges = [range(0, size + 1, step) for size in displayed_sizes]
+    # ranges = [range(0, size + 1, step) for size in displayed_sizes]
+    n = len(displayed_sizes)
+    ranges = [range(0, target + step, step) for _ in range(n)]
     for combo in itertools.product(*ranges):
         if sum(combo) == target:
             yield list(combo)
